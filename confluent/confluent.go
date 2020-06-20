@@ -8,7 +8,20 @@ import (
 	"github.com/confluentinc/confluent-kafka-go/kafka"
 	"github.com/magiconair/properties"
 	log "github.com/sirupsen/logrus"
+	"strconv"
 	"time"
+)
+
+const (
+	AdminOperationTimeout = "admin.operation.timeout"
+	AutoOffsetReset       = "auto.offset.reset"
+	GroupId               = "group.id"
+	NumPartitions         = "topic.partitions"
+	ReplicationFactor     = "topic.replication.factor"
+
+	DefaultAdminOperationTimeout = "60s"
+	DefaultNumPartitions         = "1"
+	DefaultReplicationFactor     = "3"
 )
 
 // Create a new Kafka consumer, using the specified configuration settings. An
@@ -17,10 +30,14 @@ import (
 // reason.
 func NewConsumer(config map[string]string) (*kafka.Consumer, error) {
 	configMap := createBasicConfigMap(config)
-	err := configMap.SetKey("group.id", config["group.id"])
-	err = configMap.SetKey("auto.offset.reset", config["auto.offset.reset"])
-	if nil != err {
-		return nil, fmt.Errorf("failed to configure Kafka consumer: %w", err)
+	settingsToValidate := [2]string{GroupId, AutoOffsetReset}
+	for _, setting := range settingsToValidate {
+		v, err := configMap.Get(setting, "")
+		if nil != err {
+			return nil, fmt.Errorf("failed to configure Kafka consumer: %v", err)
+		} else if "" == v {
+			return nil, fmt.Errorf("missing setting for Kafka consumer: %s", setting)
+		}
 	}
 	return kafka.NewConsumer(&configMap)
 }
@@ -59,7 +76,19 @@ func createBasicConfigMap(properties map[string]string) kafka.ConfigMap {
 
 // CreateTopic creates a topic using the Admin Client API.
 func CreateTopic(producer *kafka.Producer, topic string) {
+	topics := make([]string, 1)
+	topics[0] = topic
 
+	topicCreationConfig := make(map[string]string)
+	topicCreationConfig[AdminOperationTimeout] = DefaultAdminOperationTimeout
+	topicCreationConfig[NumPartitions] = DefaultNumPartitions
+	topicCreationConfig[ReplicationFactor] = DefaultReplicationFactor
+
+	CreateTopics(producer, topics, topicCreationConfig)
+}
+
+// CreateTopics creates one or more topics using the Admin Client API.
+func CreateTopics(producer *kafka.Producer, topics []string, config map[string]string) {
 	adminClient, err := kafka.NewAdminClientFromProducer(producer)
 	if err != nil {
 		log.Fatalf("Failed to create new admin client from producer: %s", err)
@@ -72,18 +101,47 @@ func CreateTopic(producer *kafka.Producer, topic string) {
 
 	// Create topics on cluster.
 	// Set Admin options to wait up to 60s for the operation to finish on the remote cluster
-	maxDur, err := time.ParseDuration("60s")
-	if err != nil {
-		log.Fatalf("ParseDuration(60s): %s", err)
+	if _, ok := config[AdminOperationTimeout]; !ok {
+		config[AdminOperationTimeout] = DefaultAdminOperationTimeout
+		log.Warnf("Set '%s' to default: %s", AdminOperationTimeout, DefaultAdminOperationTimeout)
 	}
+	maxDur, err := time.ParseDuration(config[AdminOperationTimeout])
+	if err != nil {
+		log.Fatalf("ParseDuration(%s): %s", config[AdminOperationTimeout], err)
+	}
+
+	if _, ok := config[NumPartitions]; !ok {
+		config[NumPartitions] = DefaultNumPartitions
+		log.Warnf("Set '%s' to default: %s", NumPartitions, DefaultNumPartitions)
+	}
+	numPartitions, err := strconv.Atoi(config[NumPartitions])
+	if err != nil {
+		log.Fatalf("ParseInt(%s): %s", config[NumPartitions], err)
+	}
+
+	if _, ok := config[ReplicationFactor]; !ok {
+		config[ReplicationFactor] = DefaultReplicationFactor
+		log.Warnf("Set '%s' to default: %s", ReplicationFactor, DefaultReplicationFactor)
+	}
+	replicationFactor, err := strconv.Atoi(config[ReplicationFactor])
+	if err != nil {
+		log.Fatalf("ParseInt(%s): %s", config[ReplicationFactor], err)
+	}
+
+	topicSpecs := make([]kafka.TopicSpecification, len(topics))
+	for idx, topic := range topics {
+		topicSpecs[idx] = kafka.TopicSpecification{
+			Topic:             topic,
+			NumPartitions:     numPartitions,
+			ReplicationFactor: replicationFactor,
+		}
+	}
+
 	results, err := adminClient.CreateTopics(
 		ctx,
 		// Multiple topics can be created simultaneously
 		// by providing more TopicSpecification structs here.
-		[]kafka.TopicSpecification{{
-			Topic:             topic,
-			NumPartitions:     1,
-			ReplicationFactor: 3}},
+		topicSpecs,
 		// Admin options
 		kafka.SetAdminOperationTimeout(maxDur))
 	if err != nil {
