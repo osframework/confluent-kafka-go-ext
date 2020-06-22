@@ -1,12 +1,24 @@
 package confluent
 
 import (
+	"github.com/confluentinc/confluent-kafka-go/kafka"
+	k "github.com/osframework/confluent-kafka-go-ext/kafka"
+	"github.com/osframework/confluent-kafka-go-ext/kafka/mocks"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"testing"
 )
 
 const GoodConfigFile = "testdata/kafka.properties"
 const EmptyConfigFile = "testdata/empty.properties"
+
+type MockAdminClientCreator struct {
+	AdminClient k.AdminClient
+}
+
+func (c *MockAdminClientCreator) NewAdminClientFromProducer(p k.Producer) (a k.AdminClient, err error) {
+	return c.AdminClient, nil
+}
 
 func TestReadConfluentCloudConfig(t *testing.T) {
 	a := assert.New(t)
@@ -73,4 +85,31 @@ func TestNewConsumer(t *testing.T) {
 	kafkaConsumer, err := NewConsumer(configMap)
 	a.Nil(err)
 	a.NotNil(kafkaConsumer, "Expected constructed Kafka consumer")
+}
+
+func TestCreateTopics(t *testing.T) {
+	mockProducer := &mocks.Producer{}
+	mockAdminClient := &mocks.AdminClient{}
+	creator := new(MockAdminClientCreator)
+	creator.AdminClient = mockAdminClient
+
+	topics := make([]string, 1)
+	topics[0] = "test.topic"
+
+	topicResults := make([]kafka.TopicResult, 1)
+	topicResults[0] = kafka.TopicResult{
+		Topic: topics[0],
+		Error: kafka.Error{},
+	}
+
+	mockAdminClient.On("CreateTopics", mock.Anything, mock.AnythingOfType("[]kafka.TopicSpecification"), mock.AnythingOfType("kafka.AdminOptionOperationTimeout")).Return(topicResults, nil)
+	mockAdminClient.On("Close")
+
+	a := assert.New(t)
+
+	configMap := ReadConfluentCloudConfig(GoodConfigFile)
+	a.Contains(configMap, "bootstrap.servers", "Did not find expected property")
+
+	createTopics(mockProducer, topics, configMap, creator)
+	mockAdminClient.AssertExpectations(t)
 }

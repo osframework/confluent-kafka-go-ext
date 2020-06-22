@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"github.com/confluentinc/confluent-kafka-go/kafka"
 	"github.com/magiconair/properties"
+	k "github.com/osframework/confluent-kafka-go-ext/kafka"
 	log "github.com/sirupsen/logrus"
 	"strconv"
 	"time"
@@ -24,30 +25,61 @@ const (
 	DefaultReplicationFactor     = "3"
 )
 
+type AdminClientCreator interface {
+	NewAdminClientFromProducer(p k.Producer) (a k.AdminClient, err error)
+}
+
+type AdminClientCreatorImpl struct{}
+
+func (_ AdminClientCreatorImpl) NewAdminClientFromProducer(p k.Producer) (a k.AdminClient, err error) {
+	var targetProducer *kafka.Producer
+	switch t := p.(type) {
+	case k.ProducerImpl:
+		targetProducer = (p.(k.ProducerImpl)).Target
+	default:
+		log.Panicf("Unexpected producer type %T", t)
+	}
+	return kafka.NewAdminClientFromProducer(targetProducer)
+}
+
 // Create a new Kafka consumer, using the specified configuration settings. An
 // error will be returned if the given configuration does not provide a consumer
 // group ID, or if the consumer cannot connect to the specified host for any
 // reason.
-func NewConsumer(config map[string]string) (*kafka.Consumer, error) {
+func NewConsumer(config map[string]string) (k.Consumer, error) {
 	configMap := createBasicConfigMap(config)
 	settingsToValidate := [2]string{GroupId, AutoOffsetReset}
 	for _, setting := range settingsToValidate {
 		v, err := configMap.Get(setting, "")
 		if nil != err {
-			return nil, fmt.Errorf("failed to configure Kafka consumer: %v", err)
+			return nil, fmt.Errorf("failed to configure Kafka targetConsumer: %v", err)
 		} else if "" == v {
-			return nil, fmt.Errorf("missing setting for Kafka consumer: %s", setting)
+			return nil, fmt.Errorf("missing setting for Kafka targetConsumer: %s", setting)
 		}
 	}
-	return kafka.NewConsumer(&configMap)
+	targetConsumer, err := kafka.NewConsumer(&configMap)
+	if nil != err {
+		return nil, err
+	} else {
+		consumer := new(k.ConsumerImpl)
+		consumer.Target = targetConsumer
+		return consumer, nil
+	}
 }
 
 // Create a new Kafka producer, using the specified configuration settings. An
 // error will be returned if the producer cannot connect to the specified host
 // for any reason.
-func NewProducer(config map[string]string) (*kafka.Producer, error) {
+func NewProducer(config map[string]string) (k.Producer, error) {
 	configMap := createBasicConfigMap(config)
-	return kafka.NewProducer(&configMap)
+	targetProducer, err := kafka.NewProducer(&configMap)
+	if nil != err {
+		return nil, err
+	} else {
+		producer := new(k.ProducerImpl)
+		producer.Target = targetProducer
+		return producer, nil
+	}
 }
 
 // Read the Confluent Cloud configuration settings from the file at the given
@@ -74,8 +106,10 @@ func createBasicConfigMap(properties map[string]string) kafka.ConfigMap {
 	return configMap
 }
 
-// CreateTopic creates a topic using the Admin Client API.
-func CreateTopic(producer *kafka.Producer, topic string) {
+// CreateTopic creates a topic using the Admin Client API with default settings.
+// This function will panic if the topic does not exist and cannot be created
+// for any reason.
+func CreateTopic(producer k.Producer, topic string) {
 	topics := make([]string, 1)
 	topics[0] = topic
 
@@ -87,12 +121,19 @@ func CreateTopic(producer *kafka.Producer, topic string) {
 	CreateTopics(producer, topics, topicCreationConfig)
 }
 
-// CreateTopics creates one or more topics using the Admin Client API.
-func CreateTopics(producer *kafka.Producer, topics []string, config map[string]string) {
-	adminClient, err := kafka.NewAdminClientFromProducer(producer)
+// CreateTopics creates one or more topics using the Admin Client API. This
+// function will panic if the topics do not exist and cannot be created for any
+// reason.
+func CreateTopics(producer k.Producer, topics []string, config map[string]string) {
+	createTopics(producer, topics, config, AdminClientCreatorImpl{})
+}
+
+func createTopics(producer k.Producer, topics []string, config map[string]string, creator AdminClientCreator) {
+	adminClient, err := creator.NewAdminClientFromProducer(producer)
 	if err != nil {
-		log.Fatalf("Failed to create new admin client from producer: %s", err)
+		log.Panicf("Failed to create new admin client from producer: %s", err)
 	}
+	defer adminClient.Close()
 
 	// Contexts are used to abort or limit the amount of time
 	// the Admin call blocks waiting for adminClient result.
@@ -107,7 +148,7 @@ func CreateTopics(producer *kafka.Producer, topics []string, config map[string]s
 	}
 	maxDur, err := time.ParseDuration(config[AdminOperationTimeout])
 	if err != nil {
-		log.Fatalf("ParseDuration(%s): %s", config[AdminOperationTimeout], err)
+		log.Panicf("ParseDuration(%s): %s", config[AdminOperationTimeout], err)
 	}
 
 	if _, ok := config[NumPartitions]; !ok {
@@ -116,7 +157,7 @@ func CreateTopics(producer *kafka.Producer, topics []string, config map[string]s
 	}
 	numPartitions, err := strconv.Atoi(config[NumPartitions])
 	if err != nil {
-		log.Fatalf("ParseInt(%s): %s", config[NumPartitions], err)
+		log.Panicf("ParseInt(%s): %s", config[NumPartitions], err)
 	}
 
 	if _, ok := config[ReplicationFactor]; !ok {
@@ -125,7 +166,7 @@ func CreateTopics(producer *kafka.Producer, topics []string, config map[string]s
 	}
 	replicationFactor, err := strconv.Atoi(config[ReplicationFactor])
 	if err != nil {
-		log.Fatalf("ParseInt(%s): %s", config[ReplicationFactor], err)
+		log.Panicf("ParseInt(%s): %s", config[ReplicationFactor], err)
 	}
 
 	topicSpecs := make([]kafka.TopicSpecification, len(topics))
@@ -145,14 +186,12 @@ func CreateTopics(producer *kafka.Producer, topics []string, config map[string]s
 		// Admin options
 		kafka.SetAdminOperationTimeout(maxDur))
 	if err != nil {
-		log.Fatalf("Admin Client request error: %v\n", err)
+		log.Panicf("Admin Client request error: %v\n", err)
 	}
 	for _, result := range results {
 		if result.Error.Code() != kafka.ErrNoError && result.Error.Code() != kafka.ErrTopicAlreadyExists {
-			log.Fatalf("Failed to create topic: %v\n", result.Error)
+			log.Panicf("Failed to create topic: %v\n", result.Error)
 		}
 		log.Infof("Created topic: %v\n", result)
 	}
-
-	adminClient.Close()
 }
