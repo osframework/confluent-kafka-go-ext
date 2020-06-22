@@ -1,6 +1,7 @@
 package confluent
 
 import (
+	"errors"
 	"github.com/confluentinc/confluent-kafka-go/kafka"
 	k "github.com/osframework/confluent-kafka-go-ext/kafka"
 	"github.com/osframework/confluent-kafka-go-ext/kafka/mocks"
@@ -18,6 +19,12 @@ type MockAdminClientCreator struct {
 
 func (c *MockAdminClientCreator) NewAdminClientFromProducer(p k.Producer) (a k.AdminClient, err error) {
 	return c.AdminClient, nil
+}
+
+type NoAdminClientCreator struct{}
+
+func (c *NoAdminClientCreator) NewAdminClientFromProducer(p k.Producer) (a k.AdminClient, err error) {
+	return nil, errors.New("Expected AdminClient creation failure")
 }
 
 func TestReadConfluentCloudConfig(t *testing.T) {
@@ -112,4 +119,45 @@ func TestCreateTopics(t *testing.T) {
 
 	createTopics(mockProducer, topics, configMap, creator)
 	mockAdminClient.AssertExpectations(t)
+}
+
+func TestCreateTopics_NoAdminClient(t *testing.T) {
+	mockProducer := &mocks.Producer{}
+	creator := new(NoAdminClientCreator)
+
+	topics := make([]string, 1)
+	topics[0] = "test.topic"
+
+	a := assert.New(t)
+
+	configMap := ReadConfluentCloudConfig(GoodConfigFile)
+	a.Contains(configMap, "bootstrap.servers", "Did not find expected property")
+
+	a.Panics(func() {
+		createTopics(mockProducer, topics, configMap, creator)
+	}, "Expected panic on missing AdminClient")
+}
+
+func TestCreateTopics_AdminClientFails(t *testing.T) {
+	mockProducer := &mocks.Producer{}
+	mockAdminClient := &mocks.AdminClient{}
+	creator := new(MockAdminClientCreator)
+	creator.AdminClient = mockAdminClient
+
+	topics := make([]string, 1)
+	topics[0] = "test.topic"
+
+	error := errors.New("Expected call failure")
+
+	mockAdminClient.On("CreateTopics", mock.Anything, mock.AnythingOfType("[]kafka.TopicSpecification"), mock.AnythingOfType("kafka.AdminOptionOperationTimeout")).Return(nil, error)
+	mockAdminClient.On("Close")
+
+	a := assert.New(t)
+
+	configMap := ReadConfluentCloudConfig(GoodConfigFile)
+	a.Contains(configMap, "bootstrap.servers", "Did not find expected property")
+
+	a.Panics(func() {
+		createTopics(mockProducer, topics, configMap, creator)
+	}, "Expected panic on missing AdminClient")
 }
