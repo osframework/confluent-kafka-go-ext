@@ -1,3 +1,19 @@
+/*
+ * Copyright 2020 OSFramework Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 // Package confluent provides functions for creating Kafka consumers and
 // producers connected to Confluent Cloud.
 package confluent
@@ -25,6 +41,7 @@ const (
 	DefaultReplicationFactor     = "3"
 )
 
+// A function which creates a new Kafka admin client from the given producer.
 type NewAdminClient func(p k.Producer) (k.AdminClient, error)
 
 // Create a new Kafka consumer, using the specified configuration settings. An
@@ -90,8 +107,8 @@ func createBasicConfigMap(properties map[string]string) kafka.ConfigMap {
 }
 
 // CreateTopic creates a topic using the Admin Client API with default settings.
-// This function will panic if the topic does not exist and cannot be created
-// for any reason.
+// This function returns an error if the topic does not exist and cannot be
+// created for any reason.
 func CreateTopic(producer k.Producer, topic string) error {
 	topics := []string{topic}
 
@@ -104,8 +121,8 @@ func CreateTopic(producer k.Producer, topic string) error {
 }
 
 // CreateTopics creates one or more topics using the Admin Client API. This
-// function will panic if the topics do not exist and cannot be created for any
-// reason.
+// function returns an error if the topics do not exist and cannot be created
+// for any reason.
 func CreateTopics(producer k.Producer, topics []string, config map[string]string) error {
 	return createTopics(producer, topics, config, func(p k.Producer) (k.AdminClient, error) {
 		return kafka.NewAdminClientFromProducer(p.GetTarget())

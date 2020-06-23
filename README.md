@@ -10,7 +10,7 @@ Simple utility extension for easy use of [Confluent's Golang Client for Apache K
 
 ## Getting Started
 
-Starting with Go 1.13, you can use [Go Modules] to install **confluent-kafka-go-ext**.
+Starting with Go 1.13, you can use [Go Modules](https://blog.golang.org/using-go-modules) to install **confluent-kafka-go-ext**.
 
 Import the `confluent` package from GitHub in your code:
 ```go
@@ -28,10 +28,6 @@ go build -tags musl ./...
 ```
 
 A dependency to the latest stable version of confluent-kafka-go-ext should be automatically added to your `go.mod` file.
-
-## Tests
-
-Briefly discuss automated tests here.
 
 ## Contributing
 Contributions to the code, examples, documentation, etc. are appreciated.
