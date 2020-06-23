@@ -13,20 +13,6 @@ import (
 const GoodConfigFile = "testdata/kafka.properties"
 const EmptyConfigFile = "testdata/empty.properties"
 
-type MockAdminClientCreator struct {
-	AdminClient k.AdminClient
-}
-
-func (c *MockAdminClientCreator) NewAdminClientFromProducer(p k.Producer) (a k.AdminClient, err error) {
-	return c.AdminClient, nil
-}
-
-type NoAdminClientCreator struct{}
-
-func (c *NoAdminClientCreator) NewAdminClientFromProducer(p k.Producer) (a k.AdminClient, err error) {
-	return nil, errors.New("Expected AdminClient creation failure")
-}
-
 func TestReadConfluentCloudConfig(t *testing.T) {
 	a := assert.New(t)
 
@@ -97,12 +83,8 @@ func TestNewConsumer(t *testing.T) {
 func TestCreateTopics(t *testing.T) {
 	mockProducer := &mocks.Producer{}
 	mockAdminClient := &mocks.AdminClient{}
-	creator := new(MockAdminClientCreator)
-	creator.AdminClient = mockAdminClient
 
-	topics := make([]string, 1)
-	topics[0] = "test.topic"
-
+	topics := []string{"test.topic"}
 	topicResults := make([]kafka.TopicResult, 1)
 	topicResults[0] = kafka.TopicResult{
 		Topic: topics[0],
@@ -117,13 +99,15 @@ func TestCreateTopics(t *testing.T) {
 	configMap := ReadConfluentCloudConfig(GoodConfigFile)
 	a.Contains(configMap, "bootstrap.servers", "Did not find expected property")
 
-	createTopics(mockProducer, topics, configMap, creator)
+	err := createTopics(mockProducer, topics, configMap, func(p k.Producer) (k.AdminClient, error) {
+		return mockAdminClient, nil
+	})
+	a.Nil(err)
 	mockAdminClient.AssertExpectations(t)
 }
 
 func TestCreateTopics_NoAdminClient(t *testing.T) {
 	mockProducer := &mocks.Producer{}
-	creator := new(NoAdminClientCreator)
 
 	topics := make([]string, 1)
 	topics[0] = "test.topic"
@@ -133,23 +117,23 @@ func TestCreateTopics_NoAdminClient(t *testing.T) {
 	configMap := ReadConfluentCloudConfig(GoodConfigFile)
 	a.Contains(configMap, "bootstrap.servers", "Did not find expected property")
 
-	a.Panics(func() {
-		createTopics(mockProducer, topics, configMap, creator)
-	}, "Expected panic on missing AdminClient")
+	err := createTopics(mockProducer, topics, configMap, func(p k.Producer) (k.AdminClient, error) {
+		return nil, errors.New("expected error on AdminClient creation")
+	})
+	a.NotNil(err)
+	a.Equal("failed to create new admin client from producer: expected error on AdminClient creation", err.Error())
 }
 
 func TestCreateTopics_AdminClientFails(t *testing.T) {
 	mockProducer := &mocks.Producer{}
 	mockAdminClient := &mocks.AdminClient{}
-	creator := new(MockAdminClientCreator)
-	creator.AdminClient = mockAdminClient
 
 	topics := make([]string, 1)
 	topics[0] = "test.topic"
 
-	error := errors.New("Expected call failure")
+	err := errors.New("expected call failure")
 
-	mockAdminClient.On("CreateTopics", mock.Anything, mock.AnythingOfType("[]kafka.TopicSpecification"), mock.AnythingOfType("kafka.AdminOptionOperationTimeout")).Return(nil, error)
+	mockAdminClient.On("CreateTopics", mock.Anything, mock.AnythingOfType("[]kafka.TopicSpecification"), mock.AnythingOfType("kafka.AdminOptionOperationTimeout")).Return(nil, err)
 	mockAdminClient.On("Close")
 
 	a := assert.New(t)
@@ -157,7 +141,10 @@ func TestCreateTopics_AdminClientFails(t *testing.T) {
 	configMap := ReadConfluentCloudConfig(GoodConfigFile)
 	a.Contains(configMap, "bootstrap.servers", "Did not find expected property")
 
-	a.Panics(func() {
-		createTopics(mockProducer, topics, configMap, creator)
-	}, "Expected panic on missing AdminClient")
+	err2 := createTopics(mockProducer, topics, configMap, func(p k.Producer) (k.AdminClient, error) {
+		return mockAdminClient, nil
+	})
+	a.NotNil(err2)
+	a.Equal("admin client request error: expected call failure", err2.Error())
+	mockAdminClient.AssertExpectations(t)
 }

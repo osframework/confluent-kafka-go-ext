@@ -25,22 +25,7 @@ const (
 	DefaultReplicationFactor     = "3"
 )
 
-type AdminClientCreator interface {
-	NewAdminClientFromProducer(p k.Producer) (a k.AdminClient, err error)
-}
-
-type AdminClientCreatorImpl struct{}
-
-func (_ AdminClientCreatorImpl) NewAdminClientFromProducer(p k.Producer) (a k.AdminClient, err error) {
-	var targetProducer *kafka.Producer
-	switch t := p.(type) {
-	case k.ProducerImpl:
-		targetProducer = (p.(k.ProducerImpl)).Target
-	default:
-		log.Panicf("Unexpected producer type %T", t)
-	}
-	return kafka.NewAdminClientFromProducer(targetProducer)
-}
+type NewAdminClient func(p k.Producer) (k.AdminClient, error)
 
 // Create a new Kafka consumer, using the specified configuration settings. An
 // error will be returned if the given configuration does not provide a consumer
@@ -60,11 +45,10 @@ func NewConsumer(config map[string]string) (k.Consumer, error) {
 	targetConsumer, err := kafka.NewConsumer(&configMap)
 	if nil != err {
 		return nil, err
-	} else {
-		consumer := new(k.ConsumerImpl)
-		consumer.Target = targetConsumer
-		return consumer, nil
 	}
+	consumer := new(k.ConsumerImpl)
+	consumer.Target = targetConsumer
+	return consumer, nil
 }
 
 // Create a new Kafka producer, using the specified configuration settings. An
@@ -75,11 +59,10 @@ func NewProducer(config map[string]string) (k.Producer, error) {
 	targetProducer, err := kafka.NewProducer(&configMap)
 	if nil != err {
 		return nil, err
-	} else {
-		producer := new(k.ProducerImpl)
-		producer.Target = targetProducer
-		return producer, nil
 	}
+	producer := new(k.ProducerImpl)
+	producer.Target = targetProducer
+	return producer, nil
 }
 
 // Read the Confluent Cloud configuration settings from the file at the given
@@ -109,29 +92,30 @@ func createBasicConfigMap(properties map[string]string) kafka.ConfigMap {
 // CreateTopic creates a topic using the Admin Client API with default settings.
 // This function will panic if the topic does not exist and cannot be created
 // for any reason.
-func CreateTopic(producer k.Producer, topic string) {
-	topics := make([]string, 1)
-	topics[0] = topic
+func CreateTopic(producer k.Producer, topic string) error {
+	topics := []string{topic}
 
 	topicCreationConfig := make(map[string]string)
 	topicCreationConfig[AdminOperationTimeout] = DefaultAdminOperationTimeout
 	topicCreationConfig[NumPartitions] = DefaultNumPartitions
 	topicCreationConfig[ReplicationFactor] = DefaultReplicationFactor
 
-	CreateTopics(producer, topics, topicCreationConfig)
+	return CreateTopics(producer, topics, topicCreationConfig)
 }
 
 // CreateTopics creates one or more topics using the Admin Client API. This
 // function will panic if the topics do not exist and cannot be created for any
 // reason.
-func CreateTopics(producer k.Producer, topics []string, config map[string]string) {
-	createTopics(producer, topics, config, AdminClientCreatorImpl{})
+func CreateTopics(producer k.Producer, topics []string, config map[string]string) error {
+	return createTopics(producer, topics, config, func(p k.Producer) (k.AdminClient, error) {
+		return kafka.NewAdminClientFromProducer(p.GetTarget())
+	})
 }
 
-func createTopics(producer k.Producer, topics []string, config map[string]string, creator AdminClientCreator) {
-	adminClient, err := creator.NewAdminClientFromProducer(producer)
+func createTopics(producer k.Producer, topics []string, config map[string]string, creatorFunc NewAdminClient) error {
+	adminClient, err := creatorFunc(producer)
 	if err != nil {
-		log.Panicf("Failed to create new admin client from producer: %s", err)
+		return fmt.Errorf("failed to create new admin client from producer: %s", err)
 	}
 	defer adminClient.Close()
 
@@ -148,7 +132,7 @@ func createTopics(producer k.Producer, topics []string, config map[string]string
 	}
 	maxDur, err := time.ParseDuration(config[AdminOperationTimeout])
 	if err != nil {
-		log.Panicf("ParseDuration(%s): %s", config[AdminOperationTimeout], err)
+		return fmt.Errorf("ParseDuration(%s): %s", config[AdminOperationTimeout], err)
 	}
 
 	if _, ok := config[NumPartitions]; !ok {
@@ -157,7 +141,7 @@ func createTopics(producer k.Producer, topics []string, config map[string]string
 	}
 	numPartitions, err := strconv.Atoi(config[NumPartitions])
 	if err != nil {
-		log.Panicf("ParseInt(%s): %s", config[NumPartitions], err)
+		return fmt.Errorf("ParseInt(%s): %s", config[NumPartitions], err)
 	}
 
 	if _, ok := config[ReplicationFactor]; !ok {
@@ -166,7 +150,7 @@ func createTopics(producer k.Producer, topics []string, config map[string]string
 	}
 	replicationFactor, err := strconv.Atoi(config[ReplicationFactor])
 	if err != nil {
-		log.Panicf("ParseInt(%s): %s", config[ReplicationFactor], err)
+		return fmt.Errorf("ParseInt(%s): %s", config[ReplicationFactor], err)
 	}
 
 	topicSpecs := make([]kafka.TopicSpecification, len(topics))
@@ -186,12 +170,14 @@ func createTopics(producer k.Producer, topics []string, config map[string]string
 		// Admin options
 		kafka.SetAdminOperationTimeout(maxDur))
 	if err != nil {
-		log.Panicf("Admin Client request error: %v\n", err)
+		return fmt.Errorf("admin client request error: %v", err)
 	}
 	for _, result := range results {
 		if result.Error.Code() != kafka.ErrNoError && result.Error.Code() != kafka.ErrTopicAlreadyExists {
-			log.Panicf("Failed to create topic: %v\n", result.Error)
+			return fmt.Errorf("failed to create topic: %v", result.Error)
 		}
 		log.Infof("Created topic: %v\n", result)
 	}
+
+	return nil
 }

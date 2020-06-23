@@ -28,11 +28,17 @@ type Producer interface {
 	SendOffsetsToTransaction(ctx context.Context, offsets []kafka.TopicPartition, consumerMetadata *kafka.ConsumerGroupMetadata) error
 	CommitTransaction(ctx context.Context) error
 	AbortTransaction(ctx context.Context) error
+
+	GetTarget() *kafka.Producer
 }
 
 // Simple decorator implementation of Producer interface
 type ProducerImpl struct {
 	Target *kafka.Producer
+}
+
+func (p ProducerImpl) GetTarget() *kafka.Producer {
+	return p.Target
 }
 
 func (p ProducerImpl) String() string {

@@ -129,6 +129,22 @@ func (_m *Producer) GetMetadata(topic *string, allTopics bool, timeoutMs int) (*
 	return r0, r1
 }
 
+// GetTarget provides a mock function with given fields:
+func (_m *Producer) GetTarget() *confluent_kafka_gokafka.Producer {
+	ret := _m.Called()
+
+	var r0 *confluent_kafka_gokafka.Producer
+	if rf, ok := ret.Get(0).(func() *confluent_kafka_gokafka.Producer); ok {
+		r0 = rf()
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*confluent_kafka_gokafka.Producer)
+		}
+	}
+
+	return r0
+}
+
 // InitTransactions provides a mock function with given fields: ctx
 func (_m *Producer) InitTransactions(ctx context.Context) error {
 	ret := _m.Called(ctx)
